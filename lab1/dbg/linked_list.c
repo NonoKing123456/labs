@@ -9,10 +9,10 @@ void list_init(list_t *h) {
 int list_size(const list_t *h) {
     node_t *p = *h;
     int r = 0;
-    do {
+    while (p) {                 // handles empty list safely
         r += 1;
         p = p->next;
-    } while (p);
+    }
     return r;
 }
 
@@ -21,6 +21,7 @@ int list_empty(const list_t *h) {
 }
 
 void list_insert(list_t *h, node_t *n) {
+    if (!n) return;             // guard against NULL insert
     n->next = *h;
     *h = n;
 }
@@ -31,6 +32,7 @@ node_t *list_find(const list_t *h, int id) {
         if (p->id == id) return p;
         p = p->next;
     }
+    return NULL;                // <-- was missing
 }
 
 node_t *list_find_before(const list_t *h, int id) {
@@ -44,19 +46,23 @@ node_t *list_find_before(const list_t *h, int id) {
 
 node_t *list_delete(list_t *h, int id) {
     node_t *r = NULL;
+
+    // delete head
     if (*h && (*h)->id == id) {
         r = *h;
-        *h = NULL;
+        *h = (*h)->next;        // <-- advance head (don’t drop entire list)
+        r->next = NULL;
         return r;
     }
-	// Here we have a syntax bug
-    node_t *p = list_find_before(h, id)
-    if (p) {
+
+    // delete non-head
+    node_t *p = list_find_before(h, id);  // (syntax fixed)
+    if (p && p->next) {
         r = p->next;
-        p->next = p->next->next;
-        r->next = NULL; 
+        p->next = r->next;
+        r->next = NULL;
     }
-    return r;
+    return r;                   // NULL if not found
 }
 
 void print_list(const list_t *h) {

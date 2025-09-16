@@ -1,7 +1,6 @@
-Name:    <FirstName LastName>
-net ID:       xxnnn
-NYU ID(N#):   N99999999
-
+Name:    Nono Fang
+net ID:       yf2617
+NYU ID(N#):   N14272562
 Collaborators (who you talked to about the lab, what you talked about):
 
 
@@ -14,13 +13,13 @@ Other acknowledgments:
 -------------------------------------------------------------------------------
 
 Answer to Exercise 6:
-
+I have fixed the code. There is a missed semicolume.
 
 Answer to Exercise 7:
-
+12,24,35,53,59,65
 
 Answer to Exercise 8:
-
+1152
 
 Anything else you'd like us to know:
 

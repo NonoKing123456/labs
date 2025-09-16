@@ -9,7 +9,9 @@ SOURCES := part1.c part2.c part3.c
 
 SOBJS :=	$(STATIC)/part1_harness.o \
 		$(STATIC)/part2_harness.o \
-		$(STATIC)/part3_harness.o 
+		$(STATIC)/part3_harness.o \
+		
+		
 
 CC     := gcc
 CFLAGS := -Werror -std=gnu99 -g
