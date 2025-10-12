@@ -1,4 +1,6 @@
 #include <cassert>
+#include <algorithm>  
+#include <vector>
 
 #include "EStore.h"
 
@@ -18,13 +20,29 @@ EStore::
 EStore(bool enableFineMode)
     : fineMode(enableFineMode)
 {
-    // TODO: Your code here.
+    smutex_init(&mtx);
+    for (int i = 0; i < INVENTORY_SIZE; ++i) scond_init(&item_cv[i]);
+
+    // fine-grained
+    for (int i = 0; i < INVENTORY_SIZE; ++i) {
+        smutex_init(&item_mtx[i]);
+        scond_init(&item_cv_fine[i]);
+    }
+    smutex_init(&global_mtx);
 }
 
 EStore::
 ~EStore()
 {
-    // TODO: Your code here.
+    for (int i = 0; i < INVENTORY_SIZE; ++i) scond_destroy(&item_cv[i]);
+    smutex_destroy(&mtx);
+
+    // fine-grained
+    for (int i = 0; i < INVENTORY_SIZE; ++i) {
+        scond_destroy(&item_cv_fine[i]);
+        smutex_destroy(&item_mtx[i]);
+    }
+    smutex_destroy(&global_mtx);
 }
 
 /*
@@ -138,9 +156,50 @@ buyItem(int item_id, double budget)
 void EStore::
 buyManyItems(vector<int>* item_ids, double budget)
 {
-    assert(fineModeEnabled());
+   assert(fineModeEnabled());
+    if (!item_ids || item_ids->empty()) return;
 
-    // TODO: Your code here.
+    std::vector<int> ids;
+    ids.reserve(item_ids->size());
+    for (int id : *item_ids) {
+        if (0 <= id && id < INVENTORY_SIZE) ids.push_back(id);
+    }
+    if (ids.empty()) return;
+    std::sort(ids.begin(), ids.end());
+    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+
+    double shipSnap, discSnap;
+    smutex_lock(&global_mtx);
+    shipSnap = shippingCost;
+    discSnap = storeDiscount;
+    smutex_unlock(&global_mtx);
+
+    for (int id : ids) {
+        smutex_lock(&item_mtx[id]);
+    }
+
+    bool ok = true;
+    double total = 0.0;
+    for (int id : ids) {
+        const Item& it = inventory[id];
+        if (!it.valid || it.quantity <= 0) { ok = false; break; }
+        double itemPrice = it.price * (1.0 - it.discount);
+        double perItemCost = itemPrice * (1.0 - discSnap) + shipSnap;
+        if (perItemCost < 0.0) { ok = false; break; }
+        total += perItemCost;
+        if (total > budget) { ok = false; break; } // early abort
+    }
+
+    // 5) Commit or abort
+    if (ok) {
+        for (int id : ids) {
+            inventory[id].quantity -= 1;
+        }
+    }
+
+    for (int i = static_cast<int>(ids.size()) - 1; i >= 0; --i) {
+        smutex_unlock(&item_mtx[ids[i]]);
+    }
 }
 
 /*
@@ -160,17 +219,24 @@ void EStore::
 addItem(int item_id, int quantity, double price, double discount)
 {
     if (item_id < 0 || item_id >= INVENTORY_SIZE) return;
-    smutex_lock(&mtx);
-    Item &it = inventory[item_id];
-    if (!it.valid) {
-        it.valid    = true;
-        it.quantity = quantity;
-        it.price    = price;
-        it.discount = discount;
-        // Wake any buyers waiting for this item
-        scond_broadcast(&item_cv[item_id], &mtx);
+
+    if (!fineMode) {
+        smutex_lock(&mtx);
+        Item &it = inventory[item_id];
+        if (!it.valid) {
+            it.valid = true; it.quantity = quantity; it.price = price; it.discount = discount;
+            scond_broadcast(&item_cv[item_id], &mtx);
+        }
+        smutex_unlock(&mtx);
+    } else {
+        smutex_lock(&item_mtx[item_id]);
+        Item &it = inventory[item_id];
+        if (!it.valid) {
+            it.valid = true; it.quantity = quantity; it.price = price; it.discount = discount;
+            scond_broadcast(&item_cv_fine[item_id], &item_mtx[item_id]);
+        }
+        smutex_unlock(&item_mtx[item_id]);
     }
-    smutex_unlock(&mtx);
 }
 
 /*
@@ -192,14 +258,18 @@ void EStore::
 removeItem(int item_id)
 {
     if (item_id < 0 || item_id >= INVENTORY_SIZE) return;
-    smutex_lock(&mtx);
-    Item &it = inventory[item_id];
-    if (it.valid) {
-        it.valid = false;
-        // Wake any buyers so they can observe removal and return
-        scond_broadcast(&item_cv[item_id], &mtx);
+
+    if (!fineMode) {
+        smutex_lock(&mtx);
+        Item &it = inventory[item_id];
+        if (it.valid) { it.valid = false; scond_broadcast(&item_cv[item_id], &mtx); }
+        smutex_unlock(&mtx);
+    } else {
+        smutex_lock(&item_mtx[item_id]);
+        Item &it = inventory[item_id];
+        if (it.valid) { it.valid = false; scond_broadcast(&item_cv_fine[item_id], &item_mtx[item_id]); }
+        smutex_unlock(&item_mtx[item_id]);
     }
-    smutex_unlock(&mtx);
 }
 
 /*
@@ -218,14 +288,18 @@ void EStore::
 addStock(int item_id, int count)
 {
     if (item_id < 0 || item_id >= INVENTORY_SIZE) return;
-    smutex_lock(&mtx);
-    Item &it = inventory[item_id];
-    if (it.valid && count > 0) {
-        it.quantity += count;
-        // More stock may unblock buyers
-        scond_broadcast(&item_cv[item_id], &mtx);
-    }
-    smutex_unlock(&mtx);
+
+    if (!fineMode) {
+        smutex_lock(&mtx);
+        Item &it = inventory[item_id];
+        if (it.valid && count > 0) { it.quantity += count; scond_broadcast(&item_cv[item_id], &mtx); }
+        smutex_unlock(&mtx);
+    } else {
+        smutex_lock(&item_mtx[item_id]);
+        Item &it = inventory[item_id];
+        if (it.valid && count > 0) { it.quantity += count; scond_broadcast(&item_cv_fine[item_id], &item_mtx[item_id]); }
+        smutex_unlock(&item_mtx[item_id]);
+    };
 }
 /*
  * ------------------------------------------------------------------
@@ -245,16 +319,26 @@ void EStore::
 priceItem(int item_id, double price)
 {
     if (item_id < 0 || item_id >= INVENTORY_SIZE) return;
-    smutex_lock(&mtx);
-    Item &it = inventory[item_id];
-    if (it.valid) {
-        bool decreased = (price < it.price);
-        it.price = price;
-        if (decreased) {
-            scond_broadcast(&item_cv[item_id], &mtx);
+
+    if (!fineMode) {
+        smutex_lock(&mtx);
+        Item &it = inventory[item_id];
+        if (it.valid) {
+            bool decreased = (price < it.price);
+            it.price = price;
+            if (decreased) scond_broadcast(&item_cv[item_id], &mtx);
         }
+        smutex_unlock(&mtx);
+    } else {
+        smutex_lock(&item_mtx[item_id]);
+        Item &it = inventory[item_id];
+        if (it.valid) {
+            bool decreased = (price < it.price);
+            it.price = price;
+            if (decreased) scond_broadcast(&item_cv_fine[item_id], &item_mtx[item_id]);
+        }
+        smutex_unlock(&item_mtx[item_id]);
     }
-    smutex_unlock(&mtx);
 }
 /*
  * ------------------------------------------------------------------
@@ -274,16 +358,26 @@ void EStore::
 discountItem(int item_id, double discount)
 {
     if (item_id < 0 || item_id >= INVENTORY_SIZE) return;
-    smutex_lock(&mtx);
-    Item &it = inventory[item_id];
-    if (it.valid) {
-        bool increased = (discount > it.discount);
-        it.discount = discount;
-        if (increased) {
-            scond_broadcast(&item_cv[item_id], &mtx);
+
+    if (!fineMode) {
+        smutex_lock(&mtx);
+        Item &it = inventory[item_id];
+        if (it.valid) {
+            bool increased = (discount > it.discount);
+            it.discount = discount;
+            if (increased) scond_broadcast(&item_cv[item_id], &mtx);
         }
+        smutex_unlock(&mtx);
+    } else {
+        smutex_lock(&item_mtx[item_id]);
+        Item &it = inventory[item_id];
+        if (it.valid) {
+            bool increased = (discount > it.discount);
+            it.discount = discount;
+            if (increased) scond_broadcast(&item_cv_fine[item_id], &item_mtx[item_id]);
+        }
+        smutex_unlock(&item_mtx[item_id]);
     }
-    smutex_unlock(&mtx);
 }
 
 /*
@@ -301,13 +395,27 @@ discountItem(int item_id, double discount)
 void EStore::
 setShippingCost(double cost)
 {
-    smutex_lock(&mtx);
-    bool decreased = (cost < shippingCost);
-    shippingCost = cost;
-    if (decreased) {
-        // Shipping is global: wake all buyers (use broadcast per-item)
-        for (int i = 0; i < INVENTORY_SIZE; ++i) {
-            scond_broadcast(&item_cv[i], &mtx);
+    if (!fineMode) {
+        smutex_lock(&mtx);
+        bool decreased = (cost < shippingCost);
+        shippingCost = cost;
+        if (decreased) {
+            for (int i = 0; i < INVENTORY_SIZE; ++i) scond_broadcast(&item_cv[i], &mtx);
+        }
+        smutex_unlock(&mtx);
+    } else {
+        smutex_lock(&global_mtx);
+        bool decreased = (cost < shippingCost);
+        shippingCost = cost;
+        smutex_unlock(&global_mtx);
+
+        if (decreased) {
+            // Wake per-item waiters; each CV must be signaled with its own lock
+            for (int i = 0; i < INVENTORY_SIZE; ++i) {
+                smutex_lock(&item_mtx[i]);
+                scond_broadcast(&item_cv_fine[i], &item_mtx[i]);
+                smutex_unlock(&item_mtx[i]);
+            }
         }
     }
     smutex_unlock(&mtx);
@@ -328,13 +436,26 @@ setShippingCost(double cost)
 void EStore::
 setStoreDiscount(double discount)
 {
-    smutex_lock(&mtx);
-    bool increased = (discount > storeDiscount);
-    storeDiscount = discount;
-    if (increased) {
-        // Store discount is global: wake all buyers
-        for (int i = 0; i < INVENTORY_SIZE; ++i) {
-            scond_broadcast(&item_cv[i], &mtx);
+    if (!fineMode) {
+        smutex_lock(&mtx);
+        bool increased = (discount > storeDiscount);
+        storeDiscount = discount;
+        if (increased) {
+            for (int i = 0; i < INVENTORY_SIZE; ++i) scond_broadcast(&item_cv[i], &mtx);
+        }
+        smutex_unlock(&mtx);
+    } else {
+        smutex_lock(&global_mtx);
+        bool increased = (discount > storeDiscount);
+        storeDiscount = discount;
+        smutex_unlock(&global_mtx);
+
+        if (increased) {
+            for (int i = 0; i < INVENTORY_SIZE; ++i) {
+                smutex_lock(&item_mtx[i]);
+                scond_broadcast(&item_cv_fine[i], &item_mtx[i]);
+                smutex_unlock(&item_mtx[i]);
+            }
         }
     }
     smutex_unlock(&mtx);
@@ -354,8 +475,16 @@ int EStore::
 getItemQuantity(int item_id)
 {
     if (item_id < 0 || item_id >= INVENTORY_SIZE) return 0;
-    smutex_lock(&mtx);
-    int q = (inventory[item_id].valid ? inventory[item_id].quantity : 0);
-    smutex_unlock(&mtx);
-    return q;
+
+    if (!fineMode) {
+        smutex_lock(&mtx);
+        int q = (inventory[item_id].valid ? inventory[item_id].quantity : 0);
+        smutex_unlock(&mtx);
+        return q;
+    } else {
+        smutex_lock(&item_mtx[item_id]);
+        int q = (inventory[item_id].valid ? inventory[item_id].quantity : 0);
+        smutex_unlock(&item_mtx[item_id]);
+        return q;
+    }
 }

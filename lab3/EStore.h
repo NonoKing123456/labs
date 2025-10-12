@@ -64,21 +64,26 @@ class Item {
  */
 class EStore {
     private:
-    Item inventory[INVENTORY_SIZE];
-    const bool fineMode;
-    // TODO: More needed here.
-    smutex_t mtx;
-    scond_t  item_cv[INVENTORY_SIZE];
-    double   shippingCost;
-    double   storeDiscount;
+        smutex_t mtx;
+        scond_t  item_cv[INVENTORY_SIZE];
+        double   shippingCost;
+        double   storeDiscount;
 
-    // Helpers (call only with mtx held)
-    inline double itemCurrentPrice_nolock(const Item& it) const {
-        return it.price * (1.0 - it.discount);
-    }
-    inline double totalCost_nolock(const Item& it) const {
-        return itemCurrentPrice_nolock(it) * (1.0 - storeDiscount) + shippingCost;
-    }
+        // NEW: fine-grained mode (one lock/cond per item)
+        smutex_t item_mtx[INVENTORY_SIZE];
+        scond_t  item_cv_fine[INVENTORY_SIZE];
+
+        // NEW: protect global fields in fine mode
+        smutex_t global_mtx;
+
+        inline double itemCurrentPrice_nolock(const Item& it) const {
+            return it.price * (1.0 - it.discount);
+        }
+        inline double totalCost_nolock(const Item& it) const {
+            return itemCurrentPrice_nolock(it) * (1.0 - storeDiscount) + shippingCost;
+        }
+        Item inventory[INVENTORY_SIZE];
+        const bool fineMode;
     public:
 
     explicit EStore(bool enableFineMode);

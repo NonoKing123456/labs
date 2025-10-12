@@ -68,10 +68,12 @@ void buy_item_handler(void *args) {
 
 void buy_many_items_handler(void *args) {
     auto *req = static_cast<BuyManyItemsReq*>(args);
-    // Print list size; printing all ids can be noisy
+
     printf("Handling BuyManyItemsReq: items - %zu, budget - $%.2f\n",
            req->item_ids.size(), req->budget);
+
     req->store->buyManyItems(&req->item_ids, req->budget);
+
     delete req;
 }
 
