@@ -1,0 +1,46 @@
+Name: Nono Fang
+net ID: yf2617  
+NYU ID(N#): N14272562
+
+Collaborators (who you talked to about the lab, what you talked about):
+
+
+Source material that you consulted:
+
+
+Other acknowledgments:
+
+
+-------------------------------------------------------------------------------
+
+Answers to exercises G1--G3:
+
+G1:
+
+It searches through every file in the current folder and its subfolders for any line containing the word smutex and prints the file names and matching lines.
+
+./sthread.cpp:void smutex_init(smutex_t *mutex)
+./sthread.cpp:void smutex_destroy(smutex_t *mutex)
+./sthread.cpp:void smutex_lock(smutex_t *mutex)
+./sthread.cpp:void smutex_unlock(smutex_t *mutex)
+
+G2:
+grep "Task" RequestGenerator.cpp
+
+grep "return" *.h
+
+G3:
+
+smutex — match any line containing this word.
+.* — match any characters (possibly none) after it.
+(.*) — match parentheses with any content inside.
+; — the line ends with a semicolon.
+
+This finds lines where smutex is part of a function call or statement ending with a semicolon, like smutex_lock(&res); or smutex_unlock(&mtx[i]);.
+It identifies where mutex functions (like lock/unlock) are actually called in your code, helping you see which parts of your program use synchronization operations.
+-------------------------------------------------------------------------------
+
+Anything else you'd like us to know:
+
+
+Extra credit exercise(s) (describe what you coded):
