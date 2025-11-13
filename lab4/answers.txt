@@ -1,20 +1,21 @@
-Name: 
-net ID: 
-NYU ID(N#): 
+Name: Nono Fang
+net ID: yf2617
+NYU ID(N#): 21142246437656
 
 Collaborators (who you talked to about the lab, what you talked about):
-
+No
 
 Source material that you consulted:
-
+No
 
 Other acknowledgments:
-
+No
 
 How long did this lab take you?
-
+several days
 
 Anything else you'd like us to know:
-
+no
 
 Extra credit exercise(s) (describe what you coded):
+no
