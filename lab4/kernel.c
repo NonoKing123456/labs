@@ -295,11 +295,46 @@ void exception(x86_64_registers* reg) {
 
     case INT_SYS_PAGE_ALLOC: {
         uintptr_t addr = current->p_registers.reg_rdi;
-        int r = assign_physical_page(addr, current->p_pid);
-        if (r >= 0) {
-            virtual_memory_map(current->p_pagetable, addr, addr,
-                               PAGESIZE, PTE_P | PTE_W | PTE_U, NULL);
+
+        // VA must be page-aligned
+        if (addr % PAGESIZE != 0) {
+            current->p_registers.reg_rax = -1;
+            break;
         }
+
+        // Find free physical page
+        int pn = -1;
+        for (int i = 0; i < NPAGES; i++) {
+            if (pageinfo[i].refcount == 0) {
+                pn = i;
+                break;
+            }
+        }
+        if (pn < 0) {
+            current->p_registers.reg_rax = -1;
+            break;
+        }
+
+        uintptr_t pa = PAGEADDRESS(pn);
+
+        // Mark page allocated
+        if (assign_physical_page(pa, current->p_pid) < 0) {
+            current->p_registers.reg_rax = -1;
+            break;
+        }
+
+        // Zero new user data page
+        memset((void*) pa, 0, PAGESIZE);
+
+        // Map into user pagetable
+        int r = virtual_memory_map(
+                    current->p_pagetable,
+                    addr,
+                    pa,
+                    PAGESIZE,
+                    PTE_P | PTE_W | PTE_U,
+                    pagetable_allocator);
+
         current->p_registers.reg_rax = r;
         break;
     }
