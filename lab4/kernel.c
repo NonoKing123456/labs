@@ -30,7 +30,7 @@ static unsigned ticks;          // # timer interrupts so far
 
 void schedule(void);
 void run(proc* p) __attribute__((noreturn));
-
+static int current_pt_owner = 0;
 
 // PAGEINFO
 //
@@ -125,6 +125,49 @@ void kernel(const char* command) {
     run(&processes[1]);
 }
 
+static x86_64_pagetable* pagetable_allocator(void) {
+    for (int pn = 0; pn < NPAGES; pn++) {
+        if (pageinfo[pn].refcount == 0) {
+            pageinfo[pn].refcount = 1;
+            pageinfo[pn].owner = current_pt_owner;
+
+            void* pa = (void*) PAGEADDRESS(pn);
+            memset(pa, 0, PAGESIZE);
+            return (x86_64_pagetable*) pa;
+        }
+    }
+    return NULL;
+}
+
+// --------------------------------------------------
+// copy_pagetable (Step 2 requirement)
+// --------------------------------------------------
+
+x86_64_pagetable* copy_pagetable(x86_64_pagetable* src, int8_t owner) {
+    current_pt_owner = owner;
+
+    // Allocate L1 root
+    x86_64_pagetable* dst = pagetable_allocator();
+    assert(dst != NULL);
+
+    // Copy ONLY kernel mappings
+    for (uintptr_t va = 0; va < PROC_START_ADDR; va += PAGESIZE) {
+        vamapping m = virtual_memory_lookup(src, va);
+
+        if (m.pn >= 0) {
+            // Map into new pagetable
+            int r = virtual_memory_map(dst,
+                                       va,
+                                       PAGEADDRESS(m.pn),
+                                       PAGESIZE,
+                                       m.perm,
+                                       pagetable_allocator);
+            assert(r == 0);
+        }
+    }
+
+    return dst;
+}
 
 // process_setup(pid, program_number)
 //    Load application program `program_number` as process number `pid`.
@@ -133,15 +176,41 @@ void kernel(const char* command) {
 
 void process_setup(pid_t pid, int program_number) {
     process_init(&processes[pid], 0);
-    processes[pid].p_pagetable = kernel_pagetable;
-    ++pageinfo[PAGENUMBER(kernel_pagetable)].refcount;
-    int r = program_load(&processes[pid], program_number, NULL);
+
+    // Allocate & copy kernel mappings
+    x86_64_pagetable* pt = copy_pagetable(kernel_pagetable, pid);
+    processes[pid].p_pagetable = pt;
+
+    // Load program code + data > PROC_START_ADDR
+    current_pt_owner = pid;
+    int r = program_load(&processes[pid], program_number, pagetable_allocator);
     assert(r >= 0);
-    processes[pid].p_registers.reg_rsp = PROC_START_ADDR + PROC_SIZE * pid;
-    uintptr_t stack_page = processes[pid].p_registers.reg_rsp - PAGESIZE;
-    assign_physical_page(stack_page, pid);
-    virtual_memory_map(processes[pid].p_pagetable, stack_page, stack_page,
-                       PAGESIZE, PTE_P | PTE_W | PTE_U, NULL);
+
+    // Allocate one stack page
+    uintptr_t rsp = PROC_START_ADDR + pid * PROC_SIZE;
+    processes[pid].p_registers.reg_rsp = rsp;
+    uintptr_t stack_va = rsp - PAGESIZE;
+
+    int spn = -1;
+    for (int pn = 0; pn < NPAGES; pn++) {
+        if (pageinfo[pn].refcount == 0) {
+            spn = pn;
+            break;
+        }
+    }
+    assert(spn >= 0);
+
+    pageinfo[spn].refcount = 1;
+    pageinfo[spn].owner = pid;
+    memset((void*) PAGEADDRESS(spn), 0, PAGESIZE);
+
+    virtual_memory_map(pt,
+                       stack_va,
+                       PAGEADDRESS(spn),
+                       PAGESIZE,
+                       PTE_P | PTE_W | PTE_U,
+                       pagetable_allocator);
+
     processes[pid].p_state = P_RUNNABLE;
 }
 
