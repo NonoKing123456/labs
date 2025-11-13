@@ -187,7 +187,8 @@ void process_setup(pid_t pid, int program_number) {
     assert(r >= 0);
 
     // Allocate one stack page
-    uintptr_t rsp = PROC_START_ADDR + pid * PROC_SIZE;
+    //uintptr_t rsp = PROC_START_ADDR + pid * PROC_SIZE;
+    uintptr_t rsp = MEMSIZE_VIRTUAL;
     processes[pid].p_registers.reg_rsp = rsp;
     uintptr_t stack_va = rsp - PAGESIZE;
 
