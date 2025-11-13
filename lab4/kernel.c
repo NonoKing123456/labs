@@ -364,6 +364,69 @@ void exception(x86_64_registers* reg) {
         break;
     }
 
+    case INT_SYS_FORK: {
+    // Find a free process slot
+    pid_t child = -1;
+    for (pid_t p = 1; p < NPROC; p++) {
+        if (processes[p].p_state == P_FREE) {
+            child = p;
+            break;
+        }
+    }
+
+    if (child < 0) {
+        current->p_registers.reg_rax = -1;
+        break;
+    }
+
+    // Create a new pagetable for the child
+    x86_64_pagetable* childpt = copy_pagetable(current->p_pagetable, child);
+    processes[child].p_pagetable = childpt;
+
+    // Copy registers
+    processes[child].p_registers = current->p_registers;
+    processes[child].p_registers.reg_rax = 0;   // child returns 0
+
+    // Copy user memory pages (everything >= PROC_START_ADDR)
+    for (uintptr_t va = PROC_START_ADDR; va < MEMSIZE_VIRTUAL; va += PAGESIZE) {
+        vamapping m = virtual_memory_lookup(current->p_pagetable, va);
+
+        if (m.pn >= 0 && (m.perm & PTE_W)) {
+            // allocate new physical page
+            int newpn = -1;
+            for (int i = 0; i < NPAGES; i++) {
+                if (pageinfo[i].refcount == 0) {
+                    newpn = i;
+                    break;
+                }
+            }
+            assert(newpn >= 0);
+
+            uintptr_t newpa = PAGEADDRESS(newpn);
+            pageinfo[newpn].refcount = 1;
+            pageinfo[newpn].owner = child;
+
+            // copy data into new physical page
+            memcpy((void*) newpa, (void*) m.pa, PAGESIZE);
+
+            // map copied page into child's pagetable
+            virtual_memory_map(childpt,
+                               va,
+                               newpa,
+                               PAGESIZE,
+                               m.perm,
+                               pagetable_allocator);
+        }
+    }
+
+    // Mark runnable
+    processes[child].p_state = P_RUNNABLE;
+
+    // Parent returns child's pid
+    current->p_registers.reg_rax = child;
+    break;
+}
+
     default:
         panic("Unexpected exception %d!\n", reg->reg_intno);
         break;                  /* will not be reached */
