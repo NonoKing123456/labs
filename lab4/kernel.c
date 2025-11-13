@@ -95,6 +95,16 @@ void kernel(const char* command) {
         processes[i].p_pid = i;
         processes[i].p_state = P_FREE;
     }
+    
+    for (uintptr_t i = 0; i < PROC_START_ADDR; i+=PAGESIZE){
+        if (i == (uintptr_t) console ){
+            if (virtual_memory_map(kernel_pagetable, i, i, PAGESIZE, PTE_P | PTE_W | PTE_U, NULL) < 0){}//throw error}
+           
+        }
+        else{
+            if (virtual_memory_map(kernel_pagetable, i, i, PAGESIZE, PTE_P | PTE_W, NULL) < 0) {}//throw error}
+        }
+    }
 
 
 #if FORCE_FORK
